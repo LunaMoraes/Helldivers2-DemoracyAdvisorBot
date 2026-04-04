@@ -58,40 +58,76 @@ client.once('ready', async () => {
 // --- COMMAND LOGIC ---
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'dive') return;
-
-    // Acknowledge the command immediately to prevent Discord's timeout
     await interaction.deferReply();
 
     try {
+        // Load Current Data
         const rawApiData = await fs.readFile(path.join(__dirname, '../cache/apiResults.json'), 'utf-8');
         const apiResults = JSON.parse(rawApiData);
         
+        // Load Historical Data (for math)
+        let oldApiResults = null;
+        try {
+            const rawOldData = await fs.readFile(path.join(__dirname, '../cache/apiResults_old.json'), 'utf-8');
+            oldApiResults = JSON.parse(rawOldData);
+        } catch (e) { /* Might not exist on first boot */ }
+
+        // Load Community JSONs
         const readCache = async (filePath) => {
             try { return JSON.parse(await fs.readFile(path.join(__dirname, `../cache/${filePath}`), 'utf-8')); } 
             catch { return {}; } 
         };
-
         const planetsDict = await readCache('planets/planets.json');
         const biomesDict = await readCache('planets/biomes.json');
         const envsDict = await readCache('planets/environmentals.json');
         
         const planetStatuses = apiResults.planetStatus || [];
         const topPlanets = planetStatuses.sort((a, b) => b.players - a.players).slice(0, 3);
-        
-        // This array will hold our 3 separate embedded cards
         const embedsArray = [];
 
         for (let i = 0; i < topPlanets.length; i++) {
             const p = topPlanets[i];
-            
             const planetInfo = findData(planetsDict, p.index) || {};
-            
-            // Map the p.owner integer directly to our hardcoded object above
             const faction = FACTION_INFO[p.owner] || { name: 'Unknown Force', color: '#808080' };
             
             const planetName = planetInfo.name || `Planet ${p.index}`;
             const sectorName = planetInfo.sector || "Unknown Sector";
             
+            // --- LIBERATION & ETA MATH ---
+            const maxHealth = p.maxHealth || 1000000;
+            const currentHealth = p.health || 0;
+            const liberationProgress = 100 - ((currentHealth / maxHealth) * 100); 
+
+            let rateString = "🟡 Calculating... (Awaiting next sync)";
+            let etaString = "Unknown";
+
+            if (oldApiResults && oldApiResults._fetchedAt && apiResults._fetchedAt) {
+                const oldPlanet = (oldApiResults.planetStatus || []).find(op => op.index === p.index);
+                if (oldPlanet) {
+                    const timeDiffMs = apiResults._fetchedAt - oldApiResults._fetchedAt;
+                    const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
+
+                    if (timeDiffHours > 0) {
+                        const healthDifference = oldPlanet.health - currentHealth;
+                        const healthPerHour = healthDifference / timeDiffHours;
+                        const percentPerHour = (healthPerHour / maxHealth) * 100;
+
+                        if (percentPerHour > 0) {
+                            rateString = `🟢 +${percentPerHour.toFixed(2)}%/hr`;
+                            const hoursRemaining = currentHealth / healthPerHour;
+                            etaString = `Approx. ${hoursRemaining.toFixed(1)} hours`;
+                        } else if (percentPerHour < 0) {
+                            rateString = `🔴 ${percentPerHour.toFixed(2)}%/hr`;
+                            etaString = `Losing ground`;
+                        } else {
+                            rateString = `⚪ 0.00%/hr (Stalemate)`;
+                            etaString = `N/A`;
+                        }
+                    }
+                }
+            }
+
+            // --- WEATHER LOGIC ---
             let conditionsText = "Standard Conditions";
             if (planetInfo.biome) {
                 const biomeInfo = findData(biomesDict, planetInfo.biome) || { name: planetInfo.biome };
@@ -105,29 +141,26 @@ client.on('interactionCreate', async interaction => {
                 conditionsText += `**Hazards:** ${envNames.join(', ')}`;
             }
 
-            // Construct a distinct embed for THIS specific planet
+            // --- EMBED BUILDER ---
             const planetEmbed = new EmbedBuilder()
                 .setTitle(`Priority Target #${i + 1}: ${planetName}`)
                 .setDescription(`Located in the **${sectorName}**`)
-                // Set the color dynamically based on the faction!
                 .setColor(faction.color)
                 .addFields(
                     { name: '💀 Occupying Force', value: faction.name, inline: true },
                     { name: '👥 Active Helldivers', value: p.players.toLocaleString(), inline: true },
+                    { name: '📊 Liberation Status', value: `**Progress:** ${liberationProgress.toFixed(3)}%\n**Rate:** ${rateString}\n**ETA:** ${etaString}`, inline: false },
                     { name: '⛈️ Planetary Conditions', value: conditionsText, inline: false }
                 );
 
-            // Add the Super Earth footer and timestamp ONLY to the very last card so it looks clean
             if (i === topPlanets.length - 1) {
                 planetEmbed.setFooter({ text: 'Data synced directly from the Galactic War Map' })
                            .setTimestamp();
             }
 
-            // Push this card into our array
             embedsArray.push(planetEmbed);
         }
 
-        // Send all three embeds at once!
         await interaction.editReply({ embeds: embedsArray });
 
     } catch (error) {
