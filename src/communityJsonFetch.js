@@ -3,32 +3,47 @@ const path = require('path');
 
 // Base URL for the raw JSON files in the community repository
 const REPO_BASE = 'https://raw.githubusercontent.com/helldivers-2/json/master/';
-const FILES = ['planets.json', 'factions.json', 'sectors.json']; 
+
+// Updated paths matching the exact repository structure
+const FILES = [
+    'factions.json',
+    'planets/planets.json',
+    'planets/biomes.json',
+    'planets/environmentals.json',
+    'planets/planetRegion.json',
+    'assignments/reward/type.json',
+    'effects/planetEffects.json',
+    'items/item_names.json' 
+]; 
+
 const CACHE_DIR = path.join(__dirname, '../cache');
 
 async function initCommunityData() {
-    // Ensure the cache directory exists
     await fs.mkdir(CACHE_DIR, { recursive: true });
 
-    for (const file of FILES) {
-        const filePath = path.join(CACHE_DIR, file);
+    for (const fileRoute of FILES) {
+        // fileRoute maps to the exact folder path (e.g., "effects/planetEffects.json")
+        const localPath = path.join(CACHE_DIR, fileRoute);
+        const localDir = path.dirname(localPath);
         
         try {
-            // Check if the file already exists
-            await fs.access(filePath);
-            console.log(`[Intel] ${file} already present in local cache. Skipping download.`);
+            // Ensure the specific sub-folders exist before saving
+            await fs.mkdir(localDir, { recursive: true });
+
+            // Check if we already downloaded it
+            await fs.access(localPath);
+            console.log(`[Intel] ${fileRoute} already secured in local cache.`);
         } catch {
-            // File does not exist, fetch it from GitHub
-            console.log(`[Intel] Acquiring ${file} from Super Earth archives...`);
+            console.log(`[Intel] Acquiring ${fileRoute} from Super Earth archives...`);
             try {
-                const response = await fetch(`${REPO_BASE}${file}`);
+                const response = await fetch(`${REPO_BASE}${fileRoute}`);
                 if (!response.ok) throw new Error(`HTTP Error ${response.status}`);
                 
                 const data = await response.json();
-                await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-                console.log(`[Intel] Successfully saved ${file}.`);
+                await fs.writeFile(localPath, JSON.stringify(data, null, 2));
+                console.log(`[Intel] Successfully saved ${fileRoute}.`);
             } catch (error) {
-                console.error(`[Intel] Failed to download ${file}:`, error.message);
+                console.error(`[Intel] Failed to download ${fileRoute}:`, error.message);
             }
         }
     }
